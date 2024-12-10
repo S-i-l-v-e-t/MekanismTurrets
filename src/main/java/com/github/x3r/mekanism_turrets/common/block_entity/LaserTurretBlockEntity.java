@@ -41,6 +41,7 @@ import net.minecraftforge.common.capabilities.CapabilityProvider;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Vector3dc;
 import org.valkyrienskies.core.api.ships.LoadedShip;
 import org.valkyrienskies.mod.common.util.VectorConversionsMCKt;
 import software.bernie.geckolib.animatable.GeoBlockEntity;
@@ -319,7 +320,12 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
     }
 
     private boolean canSeeTarget(LivingEntity e) {
-        Vec3 center = getBlockPos().getCenter();
+        Vec3 center;
+        if (VSGameUtilsKt.getShipObjectManagingPos(level,getBlockPos())!=null){
+            LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(level,worldPosition);
+            center = VectorConversionsMCKt.toMinecraft(ship.getTransform().getShipToWorld().transformPosition(VectorConversionsMCKt.toJOML(getBlockPos().getCenter())));
+        }
+        else{center = getBlockPos().getCenter();}
         Vec3 targetPos = e.position().add(0, (e.getBbHeight()*0.75), 0);
         Vec3 lookVec = center.vectorTo(targetPos).normalize().scale(0.75F);
         ClipContext ctx = new ClipContext(center.add(lookVec), targetPos, ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, null);
