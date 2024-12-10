@@ -32,13 +32,17 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.common.capabilities.CapabilityProvider;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.valkyrienskies.core.api.ships.LoadedShip;
+import org.valkyrienskies.mod.common.util.VectorConversionsMCKt;
 import software.bernie.geckolib.animatable.GeoBlockEntity;
 import software.bernie.geckolib.core.animatable.instance.AnimatableInstanceCache;
 import software.bernie.geckolib.core.animation.AnimatableManager;
@@ -54,6 +58,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.ArrayList;
 import org.apache.commons.math3.special.Erf;
+import org.valkyrienskies.mod.common.VSGameUtilsKt;
 
 public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlockEntity {
 
@@ -159,7 +164,7 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
                 targetPreVelocity.remove(0);
             }
             targetPreVelocity.add(target.getDeltaMovement());
-            Vec3 targetPos = getShootLocation(target,targetPreVelocity);
+            Vec3 targetPos = getShootLocation(target,targetPreVelocity,level,worldPosition);
             setAnimData(TARGET_POS_X, targetPos.x);
             setAnimData(TARGET_POS_Y, targetPos.y);
             setAnimData(TARGET_POS_Z, targetPos.z);
@@ -168,7 +173,7 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
                 //v1 : x part following
                 //float x = 10*((float) upgradeComponent.getUpgrades(Upgrade.SPEED) /8);
                 //v1 : make the speed upgrade function properly as the tip with function \frac{(x+1)\ln{x+1}-x}{16} 's curve
-                //v2 : use mooore complex function and get mooore effect with low count upgreads
+                //v2 : use mooore complex function and get mooore effect with low count upgrades
                 coolDown = (int) Math.max(0,tier.getCooldown() / getCoolDownMultiplier(upgradeComponent.getUpgrades(Upgrade.SPEED)));
                 //coolDown = Math.max(0,(int) Math.floor((tier.getCooldown()*(1-(0.9*(((x+1)*Math.log(x+1)-x)/16))))));
                 //coolDown = Math.max(0, tier.getCooldown()-(2*upgradeComponent.getUpgrades(Upgrade.SPEED)));
@@ -184,13 +189,20 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
         }
     }
 //use 5 ticks' velocity data to predict movement,providing more accurate prediction
-    private static Vec3 getShootLocation(LivingEntity entity,List<Vec3> preV) {
+    private static Vec3 getShootLocation(LivingEntity entity, List<Vec3> preV, Level lv,BlockPos pos) {
         Vec3 averageVelocity = Vec3.ZERO;
         for (Vec3 prevVelo : preV){
             averageVelocity = averageVelocity.add(prevVelo);
         }
         averageVelocity = averageVelocity.scale(1.0 / preV.size());// calculate averageVelocity
-        Vec3 targetPos = new Vec3(entity.getX(), entity.getY(), entity.getZ());
+        Vec3 targetPos;
+        if(VSGameUtilsKt.getShipObjectManagingPos(lv,pos) != null){
+           LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(lv,pos);
+           targetPos = VectorConversionsMCKt.toMinecraft(ship.getTransform().getWorldToShip().transformPosition(VectorConversionsMCKt.toJOML(entity.position())));
+        }
+        else{
+            targetPos = new Vec3(entity.getX(), entity.getY(), entity.getZ());
+        }
         double laserSpeed = 3F; //Laser speed is constant
         for (int i = 1; i < 21; i++) { //Tries to predict the path of the entity one second into the future
             Vec3 deltaMovement = averageVelocity.multiply(0.4, 0, 0.4);
@@ -212,7 +224,7 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
             triggerAnim("controller", "shoot");
 
             Vec3 center = getBlockPos().getCenter();
-            Vec3 targetPos = getShootLocation(target,targetPreVelocity);
+            Vec3 targetPos = getShootLocation(target,targetPreVelocity,level,worldPosition);
 
             LaserEntity laser = new LaserEntity(level, center.add(0, -0.15, 0), tier.getDamage());
             laser.setDeltaMovement(center.vectorTo(targetPos).normalize().scale(3.0F));
