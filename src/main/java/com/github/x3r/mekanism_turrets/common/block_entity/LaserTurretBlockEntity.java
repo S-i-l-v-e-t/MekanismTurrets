@@ -26,6 +26,7 @@ import mekanism.common.util.SecurityUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
@@ -34,10 +35,10 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.VerticalAnchor;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import net.minecraftforge.common.capabilities.CapabilityProvider;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -58,8 +59,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.ArrayList;
-import org.apache.commons.math3.special.Erf;
 import org.valkyrienskies.mod.common.VSGameUtilsKt;
+
 
 public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlockEntity {
 
@@ -80,6 +81,8 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
     private boolean targetsTrusted = true;
     private @Nullable LivingEntity target;
     private List<Vec3> targetPreVelocity = new ArrayList<Vec3>();
+    private Vec3 lastSelfWorldPos = null;
+    private Vec3 lastTargetWorldPos = null;
     public float xRot0 = 0;
     public float yRot0 = 0;
     private int coolDown = 0;
@@ -160,11 +163,19 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
         tryInvalidateTarget();
         tryFindTarget();
         energyContainer.setEnergyPerTick(FloatingLong.create(laserShotEnergy()));
-        if(target != null) {
-            if (targetPreVelocity.size()>=5){
-                targetPreVelocity.remove(0);
+        if (target != null) {
+            // 维持 20 tick 的滑动窗口
+            if (targetPreVelocity.size() >= 20) targetPreVelocity.remove(0);
+            Vec3 currentTargetWorldPos = target.position();
+
+            if (lastTargetWorldPos != null) {
+                targetPreVelocity.add(currentTargetWorldPos.subtract(lastTargetWorldPos));
+            } else {
+                targetPreVelocity.add(Vec3.ZERO);
             }
-            targetPreVelocity.add(target.getDeltaMovement());
+            lastTargetWorldPos = currentTargetWorldPos;
+
+
             Vec3 targetPos = getShootLocation(target,targetPreVelocity,level,worldPosition);
             setAnimData(TARGET_POS_X, targetPos.x);
             setAnimData(TARGET_POS_Y, targetPos.y);
@@ -189,31 +200,81 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
             }
         }
     }
-//use 5 ticks' velocity data to predict movement,providing more accurate prediction
-    private static Vec3 getShootLocation(LivingEntity entity, List<Vec3> preV, Level lv,BlockPos pos) {
-        Vec3 averageVelocity = Vec3.ZERO;
-        for (Vec3 prevVelo : preV){
-            averageVelocity = averageVelocity.add(prevVelo);
+    private static Vec3 getRecentAcceleration(List<Vec3> velocities) {
+        if (velocities.size() < 2) return Vec3.ZERO;
+
+        Vec3 totalAcc = Vec3.ZERO;
+        int count = 0;
+
+        int startIndex = Math.max(1, velocities.size() - 4);
+
+        for (int i = startIndex; i < velocities.size(); i++) {
+            Vec3 vCurrent = velocities.get(i);
+            Vec3 vPrev = velocities.get(i - 1);
+            totalAcc = totalAcc.add(vCurrent.subtract(vPrev));
+            count++;
         }
-        averageVelocity = averageVelocity.scale(1.0 / preV.size());// calculate averageVelocity
-        Vec3 targetPos;
-        if(VSGameUtilsKt.getShipObjectManagingPos(lv,pos) != null){
-           LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(lv,pos);
-           targetPos = VectorConversionsMCKt.toMinecraft(ship.getTransform().getWorldToShip().transformPosition(VectorConversionsMCKt.toJOML(entity.position())));
+
+        return totalAcc.scale(1.0 / count);
+    }
+
+    private static Vec3 getShootLocation(LivingEntity entity, List<Vec3> preV, Level lv, BlockPos shooterPos) {
+        // Target Avg Speed Calculation
+        Vec3 avgTargetVel = Vec3.ZERO;
+        if (!preV.isEmpty()) {
+            for (Vec3 v : preV) {
+                avgTargetVel = avgTargetVel.add(v);
+            }
+            avgTargetVel = avgTargetVel.scale(1.0 / preV.size());
         }
-        else{
-            targetPos = new Vec3(entity.getX(), entity.getY(), entity.getZ());
+
+        Vec3 targetRecentAcc = getRecentAcceleration(preV);
+        Vec3 currentWorldPos = entity.position();
+        Vec3 shooterWorldPos;
+        try {
+            LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(lv, shooterPos);
+            if (ship != null) {
+                org.joml.Vector3d localPos = new org.joml.Vector3d(shooterPos.getX() + 0.5, shooterPos.getY() + 0.5, shooterPos.getZ() + 0.5);
+                org.joml.Vector3d worldPosJOML = ship.getTransform().getShipToWorld().transformPosition(localPos);
+                shooterWorldPos = new Vec3(worldPosJOML.x, worldPosJOML.y, worldPosJOML.z);
+            } else {
+                shooterWorldPos = Vec3.atCenterOf(shooterPos);
+            }
+        } catch (NoClassDefFoundError e) {
+            shooterWorldPos = Vec3.atCenterOf(shooterPos);
         }
-        double laserSpeed = 3F; //Laser speed is constant
-        for (int i = 1; i < 21; i++) { //Tries to predict the path of the entity one second into the future
-            Vec3 deltaMovement = averageVelocity.multiply(0.4, 0, 0.4);
-            Vec3 nextPos = targetPos.add(deltaMovement.scale(i-1));
-            if(nextPos.length() <= laserSpeed*i || i == 20) {
-                return new Vec3(nextPos.x, nextPos.y+(entity.getBbHeight()*0.75), nextPos.z-0.07);
+
+        double laserSpeed = 3.0;
+        int maxTicks = 20;
+        for (int t = 1; t <= maxTicks; t++) {
+
+            if (t <= 2) {
+                avgTargetVel = avgTargetVel.add(targetRecentAcc);
             }
 
+            currentWorldPos = currentWorldPos.add(avgTargetVel);
+
+            double distanceToTarget = shooterWorldPos.distanceTo(currentWorldPos);
+            if (distanceToTarget <= laserSpeed * t || t == maxTicks) {
+                break;
+            }
         }
-        return targetPos;
+
+        Vec3 finalWorldPos = currentWorldPos.add(0, entity.getBbHeight() * 0.75, -0.07);
+
+        try {
+            LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(lv, shooterPos);
+            if (ship != null) {
+                return VectorConversionsMCKt.toMinecraft(
+                        ship.getTransform().getWorldToShip().transformPosition(
+                                VectorConversionsMCKt.toJOML(finalWorldPos)
+                        )
+                );
+            }
+        } catch (NoClassDefFoundError ignored) {
+        }
+
+        return finalWorldPos;
     }
 
     private void shootLaser() {
@@ -226,13 +287,30 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
 
             Vec3 center = getBlockPos().getCenter();
             Vec3 targetPos = getShootLocation(target,targetPreVelocity,level,worldPosition);
+            LaserEntity laser;
+            if(this.getOwnerUUID() != null){
+                laser = new LaserEntity(level, center.add(0, -0.15, 0), tier.getDamage(),((ServerLevel)this.level).getServer().getPlayerList().getPlayer(getOwnerUUID()));
+            }
+            else{
+                laser = new LaserEntity(level, center.add(0, -0.15, 0), tier.getDamage(),null);
+            }
+            Vec3 AbsoluteVelocity = center.vectorTo(targetPos).normalize().scale(3.0F);
+            try {
+                LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(this.level, this.getBlockPos());
+                if (ship != null) {
+                    org.joml.Vector3d wDir = ship.getTransform().getShipToWorld().transformDirection(
+                            VectorConversionsMCKt.toJOML(AbsoluteVelocity), new org.joml.Vector3d()
+                    );
+                    AbsoluteVelocity = VectorConversionsMCKt.toMinecraft(wDir);
+                }
+            } catch (NoClassDefFoundError ignored) {}
+            laser.shootWithAbsoluteVelocity(AbsoluteVelocity);
 
-            LaserEntity laser = new LaserEntity(level, center.add(0, -0.15, 0), tier.getDamage());
-            laser.setDeltaMovement(center.vectorTo(targetPos).normalize().scale(3.0F));
             level.addFreshEntity(laser);
             energyContainer.extract(FloatingLong.create(laserShotEnergy()), Action.EXECUTE, AutomationType.INTERNAL);
         }
     }
+
 
     private int laserShotEnergy() {
         return 1000*(tier.ordinal()+1)*Mth.square(upgradeComponent.getUpgrades(Upgrade.SPEED)+1);
@@ -243,6 +321,7 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
             setAnimData(HAS_TARGET, false);
             target = null;
             targetPreVelocity.clear();
+            lastTargetWorldPos = null;
         }
     }
 
@@ -321,11 +400,17 @@ public class LaserTurretBlockEntity extends TileEntityMekanism implements GeoBlo
 
     private boolean canSeeTarget(LivingEntity e) {
         Vec3 center;
-        if (VSGameUtilsKt.getShipObjectManagingPos(level,getBlockPos())!=null){
-            LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(level,worldPosition);
-            center = VectorConversionsMCKt.toMinecraft(ship.getTransform().getShipToWorld().transformPosition(VectorConversionsMCKt.toJOML(getBlockPos().getCenter())));
+        try{
+            if (VSGameUtilsKt.getShipObjectManagingPos(level,getBlockPos())!=null){
+                LoadedShip ship = VSGameUtilsKt.getShipObjectManagingPos(level,worldPosition);
+                center = VectorConversionsMCKt.toMinecraft(ship.getTransform().getShipToWorld().transformPosition(VectorConversionsMCKt.toJOML(getBlockPos().getCenter())));
+            }
+            else{center = getBlockPos().getCenter();}
         }
-        else{center = getBlockPos().getCenter();}
+        catch (NoClassDefFoundError err){
+            center = getBlockPos().getCenter();
+        }
+
         Vec3 targetPos = e.position().add(0, (e.getBbHeight()*0.75), 0);
         Vec3 lookVec = center.vectorTo(targetPos).normalize().scale(0.75F);
         ClipContext ctx = new ClipContext(center.add(lookVec), targetPos, ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, null);

@@ -7,6 +7,7 @@ import com.github.x3r.mekanism_turrets.common.registry.*;
 import com.mojang.logging.LogUtils;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.ModList;
@@ -40,13 +41,23 @@ public class MekanismTurrets {
         SoundRegistry.SOUNDS.register(modEventBus);
 
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, MekanismTurretsConfig.SPEC);
+        forgeBus.register(this);
 
         modEventBus.addListener(this::loadConfig);
         MekanismTurretsPacketHandler.registerPackets();
 
+
         registerDataTickets();
 
     }
+    //@SubscribeEvent
+    //public void onDeath(LivingDeathEvent e) {
+    //    if (!e.getEntity().level().isClientSide) { // 只在服务端打印
+    //        System.out.println("[DEBUG] killer=" + e.getSource().getEntity()
+    //                + ", direct=" + e.getSource().getDirectEntity()
+    //                + ", killCredit=" + e.getEntity().getKillCredit());
+    //    }
+    //}
 
     @SubscribeEvent
     public void loadConfig(ModConfigEvent.Loading event) {

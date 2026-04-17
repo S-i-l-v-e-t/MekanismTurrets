@@ -60,8 +60,8 @@ minecraft {
 }
 
 mixin {
-    add sourceSets.main, "mixins.${mod_id}.refmap.json"
-    config "mixins.${mod_id}.json"
+    //add sourceSets.main, "mixins.${mod_id}.refmap.json"
+    //config "mixins.${mod_id}.json"
 
     debug.export = true
 }
@@ -69,6 +69,14 @@ mixin {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
+    maven {
+        name = "Modrinth"
+        url = "https://api.modrinth.com/maven"
+    }
+    maven { url = uri("https://maven.minecraftforge.net/") }  // Forge Maven Repository (common for modding dependencies)
+    maven { url = uri("https://libraries.minecraft.net/") }  // Minecraft repository
+    // Add other repositories if necessary
+
     maven { url 'https://modmaven.dev/' }
     maven { url 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/' }
     maven { url 'https://www.cursemaven.com' }
@@ -155,7 +163,7 @@ dependencies {
     implementation "org.joml:joml:1.10.5"
     implementation "com.fasterxml.jackson.core:jackson-annotations:2.13.3"
     implementation 'thedarkcolour:kotlinforforge:4.10.0'
-    implementation fg.deobf("curse.maven:cc-tweaked-282001:5379173")
+    implementation fg.deobf("maven.modrinth:cc-tweaked:5F5BaGQ4")
 
 
     compileOnly fg.deobf("curse.maven:female-gender-forge-481655:4603538")
@@ -181,6 +189,8 @@ dependencies {
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 
 }
+
+
 tasks.named('processResources', ProcessResources).configure {
     var replaceProperties = [
             minecraft_version: minecraft_version, minecraft_version_range: minecraft_version_range,
